@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard Konten & Absensi</title>
+    <title>Sistem Monitoring Kalender Konten</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -19,8 +19,8 @@
             color: #007A78;
             margin-bottom: 20px;
         }
-        /* Style untuk Grid Summary / Filter di bagian atas */
-        .summary-grid {
+        /* Grid Filter Interaktif */
+        .filter-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 20px;
@@ -28,7 +28,7 @@
         }
         .card {
             background: #ffffff;
-            padding: 20px;
+            padding: 15px 20px;
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.05);
             border-left: 5px solid #009688;
@@ -42,12 +42,25 @@
             text-transform: uppercase;
             color: #777;
             font-weight: bold;
-            margin-bottom: 5px;
+            margin-bottom: 8px;
         }
         .card-value {
             font-size: 22px;
             font-weight: bold;
             color: #333;
+        }
+        select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+            background-color: #fff;
+            color: #333;
+            outline: none;
+        }
+        select:focus {
+            border-color: #009688;
         }
         #loading {
             font-weight: bold;
@@ -55,7 +68,7 @@
             text-align: center;
             margin-top: 40px;
         }
-        /* Style Tabel Utama */
+        /* Style Tabel */
         .table-responsive {
             overflow-x: auto;
             background: #fff;
@@ -81,24 +94,29 @@
         tr:hover {
             background-color: #f1f1f1;
         }
-        td:nth-child(7), td:nth-child(8), td:nth-child(10) {
-            text-align: center; /* Merapikan kolom tulisan centang/checkbox biar di tengah */
+        /* Penyelarasan kolom centang (Writing / Production) */
+        td:nth-child(7), td:nth-child(10) {
+            text-align: center;
         }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Dashboard Monitoring Konten</h2>
+    <h2>Dashboard Live Kalender Konten</h2>
     
-    <div class="summary-grid" id="summarySection" style="display:none;">
+    <div class="filter-grid" id="filterSection" style="display:none;">
         <div class="card">
             <div class="card-title">Filter Tanggal</div>
-            <div class="card-value" id="lblTanggal">-</div>
+            <select id="selectTanggal" onchange="filterAndRenderTable()">
+                <option value="ALL">-- Semua Tanggal --</option>
+            </select>
         </div>
         <div class="card">
             <div class="card-title">Filter Jenis Konten</div>
-            <div class="card-value" id="lblJenis">-</div>
+            <select id="selectJenis" onchange="filterAndRenderTable()">
+                <option value="ALL">-- Semua Jenis Konten --</option>
+            </select>
         </div>
         <div class="card kpi">
             <div class="card-title">Jumlah Konten Terfilter</div>
@@ -106,7 +124,7 @@
         </div>
     </div>
 
-    <div id="loading">Sedang mengambil database dari Google Sheets...</div>
+    <div id="loading">Sedang mengambil data mentah dari Google Sheets...</div>
     
     <div class="table-responsive">
         <table id="dataTable" style="display:none;">
@@ -117,10 +135,15 @@
 </div>
 
 <script>
-    // Taruh URL Web App Apps Script lu yang baru di sini!
+    // Paste URL Web App Apps Script Lu di Sini!
     const webAppUrl = 'https://script.google.com/macros/s/AKfycbwpkn1SQevB1HrWHrytZfBel7SNmfd6k6yGz0mQ-w1DaF9oUOUEbYnhpUmlEm020NW1aQ/exec';
 
-    async function fetchDashboardData() {
+    let masterData = [];
+    let tableHeaders = [];
+    let dateKey = '';
+    let typeKey = '';
+
+    async function initDashboard() {
         try {
             const response = await fetch(webAppUrl);
             const data = await response.json();
@@ -130,52 +153,106 @@
                 return;
             }
 
-            // 1. Tampilkan Data Summary/Filter ke Card
-            document.getElementById('lblTanggal').innerText = data.summary.tanggalFilter || '-';
-            document.getElementById('lblJenis').innerText = data.summary.jenisKontenFilter || 'Semua';
-            document.getElementById('lblJumlah').innerText = data.summary.jumlahKonten || '0';
-            document.getElementById('summarySection').style.display = 'grid';
+            masterData = data.tableData;
+            tableHeaders = data.headers;
 
-            // 2. Bikin Header Tabel
-            const tableHeader = document.getElementById('tableHeader');
-            let headerHtml = '<tr>';
-            data.headers.forEach(header => {
-                // Hilangkan teks tambahan '_2' di UI untuk kolom UPLOAD yang kembar
-                let cleanHeaderName = header.replace(/_\d+$/, '');
-                headerHtml += `<th>${cleanHeaderName}</th>`;
-            });
-            headerHtml += '</tr>';
-            tableHeader.innerHTML = headerHtml;
+            // Mencari nama key/kolom secara otomatis agar dinamis
+            dateKey = tableHeaders.find(h => h.replace(/_\d+$/, '').toUpperCase() === 'UPLOAD') || tableHeaders[0];
+            typeKey = tableHeaders.find(h => h.toUpperCase() === 'JENIS KONTEN') || tableHeaders[4];
 
-            // 3. Masukkan Data ke dalam Tabel
-            const tableBody = document.getElementById('tableBody');
-            let bodyHtml = '';
-            
-            if (data.tableData.length === 0) {
-                bodyHtml = `<tr><td colspan="${data.headers.length}" style="text-align:center;">Tidak ada data konten saat ini.</td></tr>`;
-            } else {
-                data.tableData.forEach(row => {
-                    bodyHtml += '<tr>';
-                    data.headers.forEach(header => {
-                        bodyHtml += `<td>${row[header] !== undefined ? row[header] : ''}</td>`;
-                    });
-                    bodyHtml += '</tr>';
-                });
-            }
-            tableBody.innerHTML = bodyHtml;
+            // 1. Setup Dropdown Filter secara Otomatis
+            populateDropdowns();
 
-            // Sembunyikan loading, tampilkan tabel
+            // 2. Bikin Header Tabel HTML
+            renderTableHeader();
+
+            // 3. Render Data Pertama Kali (Tampilkan semua)
+            filterAndRenderTable();
+
+            // Sembunyikan loading, munculkan layout utama
             document.getElementById('loading').style.display = 'none';
+            document.getElementById('filterSection').style.display = 'grid';
             document.getElementById('dataTable').style.display = 'table';
 
         } catch (error) {
             console.error('Error:', error);
-            document.getElementById('loading').innerText = 'Gagal memuat data. Periksa kembali koneksi atau URL Apps Script lu.';
+            document.getElementById('loading').innerText = 'Gagal memuat data. Pastikan URL Web App benar.';
         }
     }
 
-    // Jalankan fungsi otomatis saat halaman web diakses
-    fetchDashboardData();
+    function populateDropdowns() {
+        const selectTanggal = document.getElementById('selectTanggal');
+        const selectJenis = document.getElementById('selectJenis');
+
+        // Ambil list unik & buang nilai kosong
+        const uniqueDates = [...new Set(masterData.map(item => item[dateKey]).filter(Boolean))];
+        const uniqueTypes = [...new Set(masterData.map(item => item[typeKey]).filter(Boolean))];
+
+        // Urutkan data jika diperlukan (opsional)
+        uniqueDates.sort();
+        uniqueTypes.sort();
+
+        // Masukkan ke elemen <select>
+        uniqueDates.forEach(date => {
+            let opt = document.createElement('option');
+            opt.value = date;
+            opt.innerText = date;
+            selectTanggal.appendChild(opt);
+        });
+
+        uniqueTypes.forEach(type => {
+            let opt = document.createElement('option');
+            opt.value = type;
+            opt.innerText = type;
+            selectJenis.appendChild(opt);
+        });
+    }
+
+    function renderTableHeader() {
+        const tableHeader = document.getElementById('tableHeader');
+        let headerHtml = '<tr>';
+        tableHeaders.forEach(header => {
+            // Bersihkan teks '_2' di UI jika ada kolom kembar
+            let cleanName = header.replace(/_\d+$/, '');
+            headerHtml += `<th>${cleanName}</th>`;
+        });
+        headerHtml += '</tr>';
+        tableHeader.innerHTML = headerHtml;
+    }
+
+    function filterAndRenderTable() {
+        const tgtTanggal = document.getElementById('selectTanggal').value;
+        const tgtJenis = document.getElementById('selectJenis').value;
+        const tableBody = document.getElementById('tableBody');
+        
+        // Logika Penyaringan menggunakan JavaScript Array Filter
+        const filteredData = masterData.filter(row => {
+            const matchTanggal = (tgtTanggal === 'ALL' || row[dateKey] === tgtTanggal);
+            const matchJenis = (tgtJenis === 'ALL' || row[typeKey] === tgtJenis);
+            return matchTanggal && matchJenis;
+        });
+
+        // Update Counter Jumlah Konten Terfilter
+        document.getElementById('lblJumlah').innerText = filteredData.length;
+
+        // Cetak Baris Tabel
+        let bodyHtml = '';
+        if (filteredData.length === 0) {
+            bodyHtml = `<tr><td colspan="${tableHeaders.length}" style="text-align:center;">Tidak ada kecocokan data konten.</td></tr>`;
+        } else {
+            filteredData.forEach(row => {
+                bodyHtml += '<tr>';
+                tableHeaders.forEach(header => {
+                    bodyHtml += `<td>${row[header] !== undefined ? row[header] : ''}</td>`;
+                });
+                bodyHtml += '</tr>';
+            });
+        }
+        tableBody.innerHTML = bodyHtml;
+    }
+
+    // Jalankan otomatis
+    initDashboard();
 </script>
 </body>
 </html>
